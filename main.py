@@ -1,69 +1,99 @@
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
 
-from fastapi import FastAPI
-from models import Product
-app=FastAPI()
+import models, schemas
+from database import engine, SessionLocal, Base
 
+app = FastAPI()
+
+# ---------------- CREATE TABLES ----------------
+Base.metadata.create_all(bind=engine)
+
+# ---------------- DB DEPENDENCY ----------------
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ---------------- AUTO INSERT DATA ----------------
+def init_db():
+    db = SessionLocal()
+
+    try:
+        # Prevent duplicate insert
+        if db.query(models.Product).first():
+            return
+
+        products = [
+            schemas.ProductCreate(
+                name="Laptop",
+                description="Gaming laptop",
+                price=75000,
+                quantity=10
+            ),
+            schemas.ProductCreate(
+                name="Mobile",
+                description="Android phone",
+                price=25000,
+                quantity=20
+            ),
+            schemas.ProductCreate(
+                name="Headphones",
+                description="Noise cancelling",
+                price=5000,
+                quantity=15
+            )
+        ]
+
+        for product in products:
+            db.add(models.Product(**product.model_dump()))
+
+        db.commit()
+        print("✅ Default products inserted")
+
+    except Exception as e:
+        db.rollback()
+        print("❌ Insert failed:", e)
+
+    finally:
+        db.close()
+
+# ---------------- RUN ON STARTUP ----------------
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
+# ---------------- APIs ----------------
 @app.get("/")
-
 def demo():
-    return "welcome to fastapi"
-products=[
-    Product(id=1,name="iphone",description="pro 16",price=100.2,quantity=2),
-    Product(id=2,name="vivo",description="vovo new",price=229.2,quantity=10),
-    Product(id=3,name="1+",description="it good on charging",price=229.2,quantity=10),
-    Product(id=4,name="poco",description="new made gowing",price=293.3,quantity=1),
-    Product(id=5, name="samsung",description="for strog services",price=32.32,quantity=3),
-    Product(id=6,name="poco",description="Battery back up good",price=433.43,quantity=4)
-]
-@app.get("/products")
+    return "Welcome to FastAPI"
 
-def show_product():
-    return products
+@app.post("/products", response_model=schemas.Product)
+def add_product(product: schemas.ProductCreate, db: Session = Depends(get_db)):
+    db_product = models.Product(**product.dict())
+    db.add(db_product)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
 
-@app.get("/product/{id}")
+@app.get("/products", response_model=list[schemas.Product])
+def show_products(db: Session = Depends(get_db)):
+    return db.query(models.Product).all()
 
-def get_product(id:int):
-    return products[id-1]
-
-@app.post("/addp")
-def add_product(product:Product):
-    products.append(product)
+@app.get("/product/{id}", response_model=schemas.Product)
+def get_product(id: int, db: Session = Depends(get_db)):
+    product = db.query(models.Product).filter(models.Product.id == id).first()
+    if not product:
+        return {"message": "Product not found"}
     return product
 
-
-@app.put("/product/{id}")
-def update_product(id: int, product: Product):
-    for i in range(len(products)):
-        if products[i].id == id:
-            product.id = id
-            products[i] = product
-            return {"message": "Product updated successfully"}
-
-    return "Prdcut not found"
-
-
 @app.delete("/product/{id}")
-def delete_product(id: int):
-    for i in range(len(products)):
-        if products[i].id == id:
-            remove_product=products.pop(i)
-            return {
-                "message": "Product deleted successfully",
-                "deleted_product": remove_product
-            }
-    return "Product Not Delete"
-
- 
-
-
-
-
-
-
-
-
-
-
-
-
-
+def delete_product(id: int, db: Session = Depends(get_db)):
+    product = db.query(models.Product).filter(models.Product.id == id).first()
+    if not product:
+        return {"message": "Product not found"}
+    db.delete(product)
+    db.commit()
+    return {"message": "Product deleted successfully"}
